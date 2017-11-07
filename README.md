@@ -29,42 +29,72 @@ My pipeline consisted of 5 steps.
 * then I use a mask to get the ROI.
 * get the HoughLines and draw the lines in the image
 
-To make the line segments be a line, I modified the draw_lines() function, first I  divide lines into 2 groups by the sign of the slope, and calculate the slope and offset parameters of each line:
+To make the line segments be a line, I modified the draw_lines() function, first I use a filter to select the line segment by controlling the slope. the code is:
 
 ```python
 for line in lines:
-    for x1, y1, x2, y2 in line:
-        if x2-x1 < 0.01:
+    for x1,y1,x2,y2 in line:
+        if abs(x2 - x1) < 0.001:
             continue
         slope = (float(y2-y1)/float(x2-x1))
-        if slope > 0:
-            right.append([x1, y1, x2, y2])
-            slope_right = slope_right + slope
-            b = y1 - slope * x1
-            right_b_term.append(b)
-        else:
-            left.append([x1, y1, x2, y2])
-            slope_left = slope_left + slope
-            b = y1 - slope * x1
-            left_b_term.append(b)
-        y_top = min(y_top, y1, y2)
+        if not np.isnan(slope) or np.isinf(slope) or (slope == 0):
+            if (slope > -1.5) and (slope < -0.3) :
+                linesFiltered.append(line)
+            if (slope > 0.3) and (slope < 1.5) :
+                linesFiltered.append(line)
 ```
-
-I use the y of topest point as the y_top, then I calculate the average of the slope and b:
+After the filter, I divide these lines into 2 groups by the sign of the slope, and calculate the slope and b with weighted average, the weights I used here is the length of these line segments:
 
 ```python
+for line in linesFiltered:
+    for x1, y1, x2, y2 in line:
+        slope = (float(y2-y1)/float(x2-x1))
+        if not np.isnan(slope) or np.isinf(slope) or (slope == 0):
+            if slope > 0:
+                right.append([x1, y1, x2, y2])
+                length = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+                right_length.append(length)
+                slope_right.append(slope)
+                b = y1 - slope * x1
+                right_b_term.append(b)
+                right_y_top = min(right_y_top, y1, y2)
+            else:
+                left.append([x1, y1, x2, y2])
+                length = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+                left_length.append(length)
+                slope_left.append(slope)
+                b = y1 - slope * x1
+                left_b_term.append(b)
+                left_y_top = min(left_y_top, y1, y2)
+
 if len(left) != 0:
-    slope_left = slope_left / len(left)
-    left_avg_b = sum(left_b_term)/len(left_b_term)
-    x1, y1, x2, y2 = extrapolate(left, slope_left, y_top, img.shape[0], left_avg_b)
+    s_l, b_l = weight_mean(left_length, slope_left, left_b_term)
+    # fix the y_top at 320
+    x1, y1, x2, y2 = extrapolate(s_l, left_y_top, img.shape[0], b_l)
     cv2.line(img, (x1, y1), (x2, y2), color, thickness)
 
 if len(right) != 0:
-    slope_right = slope_right / len(right)
-    right_avg_b = sum(right_b_term)/len(right_b_term)
-    x1, y1, x2, y2 = extrapolate(right, slope_right, y_top, img.shape[0], right_avg_b)
+    s_r, b_r = weight_mean(right_length, slope_right, right_b_term)
+    x1, y1, x2, y2 = extrapolate(s_r, right_y_top, img.shape[0], b_r)
     cv2.line(img, (x1, y1), (x2, y2), color, thickness)
 ```
+
+I use the y of topest point as the y_top in one side, the weight_mean() function is :
+
+```python
+def weight_mean(length, slope, b):
+    sum_length = sum(length)
+    weights = []
+    for l in length:
+        weights.append(l/sum_length)
+    for i in range(len(slope)):
+        slope[i] = slope[i] * weights[i]
+        b[i] = b[i] * weights[i]
+    s_l = sum(slope)
+    b_l = sum(b)
+    return s_l, b_l
+```
+
 
 finally I calculate and draw the line by using the slope, b, y_bottom, y_top of the left line and right line.
 
